@@ -1,0 +1,32 @@
+# Virtual environment
+.venv/
+env/
+venv/
+
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Models (large and regenerable)
+models/*.joblib
+
+# Data files (can regenerate)
+data/synth.db
+data/timings.csv
+data/features_individual.csv
+data/features_pairs.csv
+data/query_pairs.txt
+
+# Logs
+*.log
+
+# OS-specific
+.DS_Store
+
+# VS Code
+.vscode/
