@@ -125,9 +125,9 @@ Format each bullet point starting with an emoji. Keep it technical but accessibl
 
     try:
         response = model.generate_content(prompt)
-        return response.text
+        return response.text, None
     except Exception as e:
-        return None
+        return None, str(e)
 
 
 # ----------------------------
@@ -374,14 +374,15 @@ if st.button("🚀 Compare Queries"):
 
             if ai_enabled:
                 with st.spinner("🤖 Generating AI explanation with Gemini..."):
-                    ai_explanation = generate_ai_explanation(
+                    ai_explanation, ai_error = generate_ai_explanation(
                         sql_a, sql_b, a_plan, b_plan,
                         a_lat, b_lat, fa, fb, winner, api_key
                     )
                 if ai_explanation:
                     st.markdown(ai_explanation)
                 else:
-                    st.warning("AI explanation failed. Falling back to rule-based analysis.")
+                    st.warning(f"AI explanation failed: {ai_error}")
+                    st.info("Falling back to rule-based analysis.")
                     reasons = generate_rule_explanation(a_plan, b_plan, a_lat, b_lat, fa, fb, winner)
                     for reason in reasons:
                         st.markdown(f"- {reason}")
