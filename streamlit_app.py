@@ -3,6 +3,7 @@ import sqlite3
 import joblib
 import os
 import re
+import google.generativeai as genai
 
 # Local imports
 from src.extract_features import count_kw, plan_feats
@@ -58,6 +59,75 @@ def load_models():
 
 
 reg_model, reg_cols, cls_model, cls_cols = load_models()
+
+
+# ----------------------------
+# Gemini API Setup
+# ----------------------------
+
+def get_gemini_api_key():
+    """Get API key from Streamlit secrets or sidebar input."""
+    # Try Streamlit secrets first (for deployed app)
+    try:
+        return st.secrets["GEMINI_API_KEY"]
+    except (KeyError, FileNotFoundError):
+        pass
+    # Try environment variable
+    env_key = os.environ.get("GEMINI_API_KEY")
+    if env_key:
+        return env_key
+    return None
+
+
+def generate_ai_explanation(sql_a, sql_b, a_plan, b_plan, a_lat, b_lat, fa, fb, winner, api_key):
+    """Use Gemini to generate a natural-language explanation of why one query is faster."""
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel("gemini-2.0-flash")
+
+    faster = "A" if winner == 1 else "B"
+    slower = "B" if winner == 1 else "A"
+
+    prompt = f"""You are a SQL performance expert. Analyze the two SQL queries below and explain why Query {faster} is predicted to be faster than Query {slower}.
+
+**Query A:**
+```sql
+{sql_a}
+```
+**Execution Plan A:** {a_plan}
+**Predicted Latency A (log-scale):** {a_lat:.4f}
+
+**Query B:**
+```sql
+{sql_b}
+```
+**Execution Plan B:** {b_plan}
+**Predicted Latency B (log-scale):** {b_lat:.4f}
+
+**ML Model Verdict:** Query {faster} is faster.
+
+**Feature Comparison (Query A vs B):**
+- Index usage: A={fa.get('plan_uses_index', 0)}, B={fb.get('plan_uses_index', 0)}
+- Full table scans: A={fa.get('plan_scan', 0)}, B={fb.get('plan_scan', 0)}
+- Index searches: A={fa.get('plan_search', 0)}, B={fb.get('plan_search', 0)}
+- Temp B-tree: A={fa.get('plan_temp_btree', 0)}, B={fb.get('plan_temp_btree', 0)}
+- JOINs: A={fa.get('kw_join', 0)}, B={fb.get('kw_join', 0)}
+- EXISTS: A={fa.get('kw_exists', 0)}, B={fb.get('kw_exists', 0)}
+- IN: A={fa.get('kw_in', 0)}, B={fb.get('kw_in', 0)}
+- Subquery indicators (parens): A={fa.get('num_parens', 0)}, B={fb.get('num_parens', 0)}
+- Query length: A={fa.get('len_chars', 0)}, B={fb.get('len_chars', 0)}
+
+Provide a clear, concise explanation in 3-5 bullet points. Focus on:
+1. What specific execution plan differences make one faster
+2. How the SQL structure (JOIN vs subquery, IN vs EXISTS, index usage) affects performance
+3. Any database engine optimizations at play
+
+Format each bullet point starting with an emoji. Keep it technical but accessible. Do not use headers or titles — just the bullet points."""
+
+    try:
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        return None
 
 
 # ----------------------------
@@ -143,10 +213,10 @@ def predict_pair(a_sql, b_sql):
 
 
 # ----------------------------
-# Helper: Generate explanation
+# Fallback: Rule-based explanation
 # ----------------------------
 
-def generate_explanation(a_plan, b_plan, a_lat, b_lat, fa, fb, winner):
+def generate_rule_explanation(a_plan, b_plan, a_lat, b_lat, fa, fb, winner):
     """Analyze plan and feature differences to explain why one query is faster."""
     faster = "A" if winner == 1 else "B"
     slower = "B" if winner == 1 else "A"
@@ -156,8 +226,6 @@ def generate_explanation(a_plan, b_plan, a_lat, b_lat, fa, fb, winner):
     plan_slow = b_plan if winner == 1 else a_plan
 
     reasons = []
-
-    # --- Plan-based reasons ---
 
     # Index usage
     fast_idx = "using index" in plan_fast.lower()
@@ -182,11 +250,9 @@ def generate_explanation(a_plan, b_plan, a_lat, b_lat, fa, fb, winner):
     if slow_corr > fast_corr:
         reasons.append(f"🔄 Query {slower} uses **{slow_corr} correlated subquery/subqueries** (vs {fast_corr}). Correlated subqueries re-execute for every row in the outer query, which is expensive.")
 
-    # Temp B-tree (sorting without index)
+    # Temp B-tree
     if f_slow.get("plan_temp_btree", 0) > f_fast.get("plan_temp_btree", 0):
         reasons.append(f"🌡️ Query {slower} requires a **temporary B-tree** for sorting, meaning the ORDER BY column is not indexed.")
-
-    # --- SQL structure reasons ---
 
     # JOIN vs subquery
     if f_fast.get("kw_join", 0) > f_slow.get("kw_join", 0) and f_slow.get("num_parens", 0) > f_fast.get("num_parens", 0):
@@ -228,28 +294,65 @@ def generate_explanation(a_plan, b_plan, a_lat, b_lat, fa, fb, winner):
 # STREAMLIT UI
 # ----------------------------
 
+st.set_page_config(page_title="QueryComparatorAI", page_icon="🔍", layout="wide")
+
 st.title("🔍 QueryComparatorAI")
-st.write("Compare two SQL queries and predict which one is faster using ML.")
+st.write("Compare two SQL queries and predict which one is faster using ML + GenAI.")
+
+# Sidebar for API key
+with st.sidebar:
+    st.header("⚙️ Settings")
+    api_key = get_gemini_api_key()
+    user_api_key = st.text_input(
+        "Gemini API Key",
+        value=api_key or "",
+        type="password",
+        help="Enter your Google Gemini API key for AI-powered explanations. Get one free at https://aistudio.google.com/apikey"
+    )
+    if user_api_key:
+        api_key = user_api_key
+
+    ai_enabled = bool(api_key)
+    if ai_enabled:
+        st.success("✅ Gemini AI enabled")
+    else:
+        st.info("💡 Add a Gemini API key for AI-powered explanations. Without it, rule-based analysis will be used.")
+
+    st.markdown("---")
+    st.markdown("**Database Schema:**")
+    st.markdown("- `users` — user_id, name, country, signup_date")
+    st.markdown("- `products` — product_id, name, category, price")
+    st.markdown("- `orders` — order_id, user_id, product_id, quantity, order_date, status")
+    st.markdown("- `reviews` — review_id, user_id, product_id, rating, review_date")
+
 
 sql_a = st.text_area("SQL Query A", height=160)
 sql_b = st.text_area("SQL Query B", height=160)
 
-if st.button("Compare Queries"):
+if st.button("🚀 Compare Queries"):
 
     if not sql_a.strip() or not sql_b.strip():
         st.error("Please enter both SQL queries.")
     else:
         try:
-            with st.spinner("Analyzing..."):
+            with st.spinner("Running ML models..."):
                 a_plan, b_plan, a_lat, b_lat, winner, fa, fb = predict_pair(sql_a, sql_b)
 
             st.subheader("📌 Query Plans")
-            st.write("**Plan A:**", a_plan)
-            st.write("**Plan B:**", b_plan)
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("**Plan A:**")
+                st.code(a_plan, language=None)
+            with col2:
+                st.markdown("**Plan B:**")
+                st.code(b_plan, language=None)
 
             st.subheader("⏱ Predicted Latency (log-scale)")
-            st.write(f"✅ Query A: `{a_lat:.4f}`")
-            st.write(f"✅ Query B: `{b_lat:.4f}`")
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Query A", f"{a_lat:.4f}")
+            with col2:
+                st.metric("Query B", f"{b_lat:.4f}")
 
             st.subheader("🏆 Verdict")
             if winner == 1:
@@ -257,11 +360,27 @@ if st.button("Compare Queries"):
             else:
                 st.success("✅ Query **B** is predicted to be faster")
 
-            # Explanation section
+            # AI-powered explanation
             st.subheader("🧠 Why?")
-            reasons = generate_explanation(a_plan, b_plan, a_lat, b_lat, fa, fb, winner)
-            for reason in reasons:
-                st.markdown(f"- {reason}")
+
+            if ai_enabled:
+                with st.spinner("🤖 Generating AI explanation with Gemini..."):
+                    ai_explanation = generate_ai_explanation(
+                        sql_a, sql_b, a_plan, b_plan,
+                        a_lat, b_lat, fa, fb, winner, api_key
+                    )
+                if ai_explanation:
+                    st.markdown(ai_explanation)
+                else:
+                    st.warning("AI explanation failed. Falling back to rule-based analysis.")
+                    reasons = generate_rule_explanation(a_plan, b_plan, a_lat, b_lat, fa, fb, winner)
+                    for reason in reasons:
+                        st.markdown(f"- {reason}")
+            else:
+                reasons = generate_rule_explanation(a_plan, b_plan, a_lat, b_lat, fa, fb, winner)
+                for reason in reasons:
+                    st.markdown(f"- {reason}")
+                st.info("💡 Add a Gemini API key in the sidebar for richer, AI-powered explanations.")
 
         except ValueError as e:
             st.error(f"⚠️ {e}")

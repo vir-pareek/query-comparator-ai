@@ -4,3 +4,6 @@ scikit-learn
 jinja2
 sqlparse
 matplotlib
+google-generativeai
+streamlit
+joblib
