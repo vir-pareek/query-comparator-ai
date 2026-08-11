@@ -302,21 +302,30 @@ st.write("Compare two SQL queries and predict which one is faster using ML + Gen
 # Sidebar for API key
 with st.sidebar:
     st.header("⚙️ Settings")
-    api_key = get_gemini_api_key()
-    user_api_key = st.text_input(
-        "Gemini API Key",
-        value=api_key or "",
-        type="password",
-        help="Enter your Google Gemini API key for AI-powered explanations. Get one free at https://aistudio.google.com/apikey"
-    )
-    if user_api_key:
-        api_key = user_api_key
 
-    ai_enabled = bool(api_key)
-    if ai_enabled:
+    # Check for server-side secret (never exposed to browser)
+    server_api_key = get_gemini_api_key()
+
+    if server_api_key:
+        # Secret is configured server-side — don't show input, don't leak the key
+        api_key = server_api_key
         st.success("✅ Gemini AI enabled")
     else:
-        st.info("💡 Add a Gemini API key for AI-powered explanations. Without it, rule-based analysis will be used.")
+        # No server secret — let the user provide their own key
+        user_api_key = st.text_input(
+            "Gemini API Key",
+            value="",
+            type="password",
+            help="Enter your Google Gemini API key for AI-powered explanations. Get one free at https://aistudio.google.com/apikey"
+        )
+        api_key = user_api_key if user_api_key else None
+
+        if api_key:
+            st.success("✅ Gemini AI enabled")
+        else:
+            st.info("💡 Add a Gemini API key for AI-powered explanations. Without it, rule-based analysis will be used.")
+
+    ai_enabled = bool(api_key)
 
     st.markdown("---")
     st.markdown("**Database Schema:**")
