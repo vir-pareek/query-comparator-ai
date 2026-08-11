@@ -82,7 +82,7 @@ def get_gemini_api_key():
 def generate_ai_explanation(sql_a, sql_b, a_plan, b_plan, a_lat, b_lat, fa, fb, winner, api_key):
     """Use Gemini to generate a natural-language explanation of why one query is faster."""
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-2.0-flash")
+    model = genai.GenerativeModel("gemini-2.5-flash")
 
     faster = "A" if winner == 1 else "B"
     slower = "B" if winner == 1 else "A"
